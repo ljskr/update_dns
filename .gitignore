@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.py[cod]
+ddns_state.json
+ip_history.txt
+update_dns.log
