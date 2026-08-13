@@ -70,15 +70,21 @@ Copy-Item .env.example .env
 | `CF_RECORD_ID` | 是 | - | 要更新的 Cloudflare DNS 记录 ID |
 | `CF_DNS_NAME` | 是 | - | 完整记录名，例如 `home.example.com` |
 | `GET_IP_URL` | 否 | `https://ipv4.ddnspod.com` | 返回纯文本 IPv4 地址的查询 URL |
-| `DDNS_STATE_FILE` | 否 | 脚本目录下的 `ddns_state.json` | 同步状态文件路径 |
-| `STORE_IP_FILE_PATH` | 否 | 脚本目录下的 `ip_history.txt` | 公网 IP 变更历史文件路径 |
-| `DDNS_LOG_FILE` | 否 | 脚本目录下的 `update_dns.log` | 运行日志文件路径；父目录不存在时自动创建 |
+| `DDNS_HOME` | 否 | 脚本目录 | 运行数据的基础目录；相对路径基于脚本目录，不受启动时工作目录影响 |
+| `DDNS_STATE_FILE` | 否 | `ddns_state.json` | 同步状态文件；相对路径基于 `DDNS_HOME` |
+| `STORE_IP_FILE_PATH` | 否 | `ip_history.txt` | 公网 IP 变更历史；相对路径基于 `DDNS_HOME` |
+| `DDNS_LOG_FILE` | 否 | `update_dns.log` | 运行日志；相对路径基于 `DDNS_HOME`，父目录不存在时自动创建 |
 
 阿里云的记录 ID 可通过云解析 DNS API 的 `DescribeDomainRecords` 查询。Cloudflare 的 Zone ID 可在域名概览页查看，记录 ID 可通过“列出 DNS 记录”API 查询。
 
 ### `.env` 示例
 
 ```dotenv
+DDNS_HOME=/root/update_dns
+STORE_IP_FILE_PATH=ip_history.txt
+DDNS_STATE_FILE=ddns_state.json
+DDNS_LOG_FILE=update_dns.log
+
 ALIYUN_ACCESS_KEY_ID=your-access-key-id
 ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
 ALIYUN_REGION_ID=cn-shenzhen
@@ -105,7 +111,7 @@ python .\update_dns.py
 
 ## 运行结果
 
-首次运行会更新两家服务商，并在脚本目录生成：
+首次运行会更新两家服务商，并在 `DDNS_HOME` 目录生成（未配置时即脚本目录）：
 
 - `ddns_state.json`：保存每家服务商最后成功写入的 IP 和时间
 - `ip_history.txt`：按 `IP<TAB>时间` 格式记录公网 IP 的变化历史
@@ -131,6 +137,12 @@ python .\update_dns.py
 ```
 
 脚本本身会写入 `DDNS_LOG_FILE`，无需再通过 cron 重定向输出。若仍需收集 cron 启动层面的错误，可按运行环境另行配置重定向。
+
+也可以直接使用 Python 命令；相对运行文件路径会基于 `DDNS_HOME`，不会写入 cron 的当前工作目录：
+
+```cron
+*/5 * * * * /root/update_dns/venv/bin/python3 /root/update_dns/update_dns.py
+```
 
 确保启动脚本权限足够严格，例如：
 

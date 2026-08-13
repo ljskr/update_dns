@@ -26,16 +26,27 @@ from aliyunsdkalidns.request.v20150109 import UpdateDomainRecordRequest
 CUR_DIR = os.path.dirname(os.path.realpath(__file__))
 load_dotenv(os.path.join(CUR_DIR, ".env"), override=False)
 
+
+configured_home = os.environ.get("DDNS_HOME", "").strip()
+configured_home = os.path.expanduser(configured_home or CUR_DIR)
+if not os.path.isabs(configured_home):
+    configured_home = os.path.join(CUR_DIR, configured_home)
+DDNS_HOME = os.path.abspath(configured_home)
+
+
+def resolve_config_path(name: str, default_name: str) -> str:
+    """Resolve relative runtime paths against DDNS_HOME."""
+    value = os.environ.get(name, default_name).strip() or default_name
+    value = os.path.expanduser(value)
+    if not os.path.isabs(value):
+        value = os.path.join(DDNS_HOME, value)
+    return os.path.abspath(value)
+
+
 GET_IP_URL = os.environ.get("GET_IP_URL", "https://ipv4.ddnspod.com").strip()
-STORE_IP_FILE_PATH = os.environ.get(
-    "STORE_IP_FILE_PATH", os.path.join(CUR_DIR, "ip_history.txt")
-)
-DDNS_STATE_FILE = os.environ.get(
-    "DDNS_STATE_FILE", os.path.join(CUR_DIR, "ddns_state.json")
-)
-DDNS_LOG_FILE = os.environ.get(
-    "DDNS_LOG_FILE", os.path.join(CUR_DIR, "update_dns.log")
-)
+STORE_IP_FILE_PATH = resolve_config_path("STORE_IP_FILE_PATH", "ip_history.txt")
+DDNS_STATE_FILE = resolve_config_path("DDNS_STATE_FILE", "ddns_state.json")
+DDNS_LOG_FILE = resolve_config_path("DDNS_LOG_FILE", "update_dns.log")
 
 # 阿里云配置
 ALIYUN_ACCESS_KEY_ID = os.environ.get("ALIYUN_ACCESS_KEY_ID", "").strip()
