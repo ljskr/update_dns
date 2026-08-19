@@ -101,10 +101,18 @@ providers:
 
   "3322":
     enabled: false
-    accounts: []
+    accounts:
+      - name: home
+        url: https://members.3322.net/dyndns/update
+        verify_ssl: true
+        username: your-username
+        password: your-password
+        hostname: your-hostname.x3322.net
 ```
 
 每种方式通过 `enabled` 开关控制。每个账号的 `name` 必须唯一，且不能包含空白或冒号；它也用于生成 `aliyun:home`、`cloudflare:office` 等独立状态键。某个账号失败后，下次只重试该账号。
+
+如果 3322 服务端 HTTPS 证书临时失效，可以在对应账号中显式设置 `verify_ssl: false`。这会跳过服务器身份校验，存在中间人攻击风险，只应临时使用；证书恢复后应立即改回 `true`。不建议改用 HTTP，因为该接口使用 Basic 认证，用户名和密码会以明文传输。
 
 阿里云记录 ID 可通过云解析 DNS API 的 `DescribeDomainRecords` 查询。Cloudflare 的 Zone ID 可在域名概览页查看，记录 ID 可通过“列出 DNS 记录”API 查询。
 

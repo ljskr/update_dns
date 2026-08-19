@@ -42,8 +42,9 @@ providers:
     accounts:
       - name: home
         url: https://members.3322.net/dyndns/update
+        # 仅在服务端证书异常且明确接受风险时临时设为 false
+        verify_ssl: true
         username: your-username
         password: your-password
         hostname: your-hostname.x3322.net
-
 

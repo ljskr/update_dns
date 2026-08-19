@@ -191,6 +191,9 @@ def update_cloudflare(ip: str, config: dict[str, str]) -> None:
 def update_3322(ip: str, config: dict[str, str]) -> None:
     """通过 members.3322.net 兼容接口更新动态域名。"""
     url = config.get("url", "https://members.3322.net/dyndns/update")
+    verify_ssl_value = config.get("verify_ssl", "true").lower()
+    if verify_ssl_value not in {"true", "false"}:
+        raise RuntimeError("verify_ssl 必须是 true 或 false")
     username = required_config("username", config.get("username", ""))
     password = required_config("password", config.get("password", ""))
     hostname = required_config("hostname", config.get("hostname", ""))
@@ -198,6 +201,7 @@ def update_3322(ip: str, config: dict[str, str]) -> None:
         url,
         params={"hostname": hostname, "myip": ip},
         auth=(username, password),
+        verify=verify_ssl_value == "true",
         timeout=(5, 15),
     )
     response.raise_for_status()
