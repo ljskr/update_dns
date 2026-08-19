@@ -1,6 +1,6 @@
 # update_dns
 
-一个轻量级的多服务商 DDNS 脚本：获取当前公网 IPv4 地址，并将其同步到阿里云 DNS 和 Cloudflare 的 A 记录。
+一个轻量级的多服务商 DDNS 脚本：获取当前公网 IPv4 地址，并按配置同步到阿里云 DNS、Cloudflare 或公云（3322）动态 DNS。
 
 脚本会在本地保存每个服务商最后一次成功写入的地址。公网 IP 未变化时不会重复调用 DNS 更新接口；如果某一家更新失败，下次运行时仍会单独重试该服务商。
 
@@ -9,6 +9,8 @@
 - 从可配置的公网 IP 查询服务获取 IPv4 地址
 - 同步阿里云 DNS A 记录
 - 同步 Cloudflare DNS A 记录（DNS only，不启用代理）
+- 通过 `members.3322.net` 兼容接口同步公云（3322）动态域名
+- 通过 `DDNS_PROVIDERS` 只启用指定的更新方式
 - 对临时网络错误和 `429`、`5xx` 响应自动重试
 - 原子写入状态文件，避免中途退出破坏状态
 - 仅在公网 IP 变化时追加一条历史记录
@@ -60,15 +62,20 @@ Copy-Item .env.example .env
 
 | 环境变量 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `ALIYUN_ACCESS_KEY_ID` | 是 | - | 阿里云 AccessKey ID |
-| `ALIYUN_ACCESS_KEY_SECRET` | 是 | - | 阿里云 AccessKey Secret |
+| `DDNS_PROVIDERS` | 否 | `aliyun,cloudflare` | 启用的更新方式，逗号分隔；可选 `aliyun`、`cloudflare`、`3322` |
+| `ALIYUN_ACCESS_KEY_ID` | 启用 Aliyun 时 | - | 阿里云 AccessKey ID |
+| `ALIYUN_ACCESS_KEY_SECRET` | 启用 Aliyun 时 | - | 阿里云 AccessKey Secret |
 | `ALIYUN_REGION_ID` | 否 | `cn-shenzhen` | 阿里云 API Region ID |
-| `ALIYUN_RECORD_ID` | 是 | - | 要更新的阿里云解析记录 ID，不是域名 |
-| `ALIYUN_RECORD_RR` | 是 | - | 主机记录，例如 `home`；根域名通常为 `@` |
-| `CF_API_TOKEN` | 是 | - | Cloudflare API Token，需要对应 Zone 的 DNS 编辑权限 |
-| `CF_ZONE_ID` | 是 | - | Cloudflare Zone ID |
-| `CF_RECORD_ID` | 是 | - | 要更新的 Cloudflare DNS 记录 ID |
-| `CF_DNS_NAME` | 是 | - | 完整记录名，例如 `home.example.com` |
+| `ALIYUN_RECORD_ID` | 启用 Aliyun 时 | - | 要更新的阿里云解析记录 ID，不是域名 |
+| `ALIYUN_RECORD_RR` | 启用 Aliyun 时 | - | 主机记录，例如 `home`；根域名通常为 `@` |
+| `CF_API_TOKEN` | 启用 Cloudflare 时 | - | Cloudflare API Token，需要对应 Zone 的 DNS 编辑权限 |
+| `CF_ZONE_ID` | 启用 Cloudflare 时 | - | Cloudflare Zone ID |
+| `CF_RECORD_ID` | 启用 Cloudflare 时 | - | 要更新的 Cloudflare DNS 记录 ID |
+| `CF_DNS_NAME` | 启用 Cloudflare 时 | - | 完整记录名，例如 `home.example.com` |
+| `DYNDNS_3322_URL` | 否 | `https://members.3322.net/dyndns/update` | 3322 兼容更新接口 |
+| `DYNDNS_3322_USERNAME` | 启用 3322 时 | - | HTTP Basic 用户名 |
+| `DYNDNS_3322_PASSWORD` | 启用 3322 时 | - | HTTP Basic 密码 |
+| `DYNDNS_3322_HOSTNAME` | 启用 3322 时 | - | 要更新的完整动态域名 |
 | `GET_IP_URL` | 否 | `https://ipv4.ddnspod.com` | 返回纯文本 IPv4 地址的查询 URL |
 | `DDNS_HOME` | 否 | 脚本目录 | 运行数据的基础目录；相对路径基于脚本目录，不受启动时工作目录影响 |
 | `DDNS_STATE_FILE` | 否 | `ddns_state.json` | 同步状态文件；相对路径基于 `DDNS_HOME` |
@@ -84,6 +91,7 @@ DDNS_HOME=/root/update_dns
 STORE_IP_FILE_PATH=ip_history.txt
 DDNS_STATE_FILE=ddns_state.json
 DDNS_LOG_FILE=update_dns.log
+DDNS_PROVIDERS=aliyun,cloudflare,3322
 
 ALIYUN_ACCESS_KEY_ID=your-access-key-id
 ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
@@ -95,6 +103,10 @@ CF_API_TOKEN=your-cloudflare-api-token
 CF_ZONE_ID=your-zone-id
 CF_RECORD_ID=your-record-id
 CF_DNS_NAME=home.example.com
+
+DYNDNS_3322_USERNAME=your-username
+DYNDNS_3322_PASSWORD=your-password
+DYNDNS_3322_HOSTNAME=your-hostname.x3322.net
 ```
 
 配置完成后运行：
@@ -120,9 +132,9 @@ python .\update_dns.py
 之后的行为如下：
 
 - 当前 IP 与某服务商的成功状态一致：跳过该服务商
-- 当前 IP 已变化：更新两家服务商
+- 当前 IP 已变化：更新所有已启用的服务商
 - 仅一家更新失败：保留另一家的成功状态，下次只重试失败的一家
-- 状态文件不存在或损坏：重新同步全部记录
+- 状态文件不存在或损坏：重新同步全部已启用记录
 
 进程在全部同步成功或无需更新时返回 `0`；公网 IP 获取、状态保存或任一 DNS 更新失败时返回 `1`。
 

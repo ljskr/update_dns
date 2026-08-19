@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write Aliyun and Cloudflare DNS only when the locally observed IPv4 changes."""
+"""Update enabled DDNS providers when the locally observed IPv4 changes."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ def resolve_config_path(name: str, default_name: str) -> str:
 
 
 GET_IP_URL = os.environ.get("GET_IP_URL", "https://ipv4.ddnspod.com").strip()
+DDNS_PROVIDERS = os.environ.get("DDNS_PROVIDERS", "aliyun,cloudflare").strip()
 STORE_IP_FILE_PATH = resolve_config_path("STORE_IP_FILE_PATH", "ip_history.txt")
 DDNS_STATE_FILE = resolve_config_path("DDNS_STATE_FILE", "ddns_state.json")
 DDNS_LOG_FILE = resolve_config_path("DDNS_LOG_FILE", "update_dns.log")
@@ -61,6 +62,16 @@ CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
 CF_ZONE_ID = os.environ.get("CF_ZONE_ID", "").strip()
 CF_RECORD_ID = os.environ.get("CF_RECORD_ID", "").strip()
 CF_DNS_NAME = os.environ.get("CF_DNS_NAME", "").strip().rstrip(".").lower()
+
+# 公云（3322）动态域名配置
+DYNDNS_3322_URL = os.environ.get(
+    "DYNDNS_3322_URL", "https://members.3322.net/dyndns/update"
+).strip()
+DYNDNS_3322_USERNAME = os.environ.get("DYNDNS_3322_USERNAME", "").strip()
+DYNDNS_3322_PASSWORD = os.environ.get("DYNDNS_3322_PASSWORD", "").strip()
+DYNDNS_3322_HOSTNAME = (
+    os.environ.get("DYNDNS_3322_HOSTNAME", "").strip().rstrip(".").lower()
+)
 # ======================================================
 
 
@@ -170,6 +181,44 @@ def update_cloudflare(ip: str) -> None:
     LOG.info("Cloudflare 写入成功：%s -> %s（DNS only）", dns_name, ip)
 
 
+def update_3322(ip: str) -> None:
+    """通过 members.3322.net 兼容接口更新动态域名。"""
+    url = required_config("DYNDNS_3322_URL", DYNDNS_3322_URL)
+    username = required_config("DYNDNS_3322_USERNAME", DYNDNS_3322_USERNAME)
+    password = required_config("DYNDNS_3322_PASSWORD", DYNDNS_3322_PASSWORD)
+    hostname = required_config("DYNDNS_3322_HOSTNAME", DYNDNS_3322_HOSTNAME)
+    response = HTTP.get(
+        url,
+        params={"hostname": hostname, "myip": ip},
+        auth=(username, password),
+        timeout=(5, 15),
+    )
+    response.raise_for_status()
+    result = response.text.strip()
+    if not (result.startswith("good ") or result.startswith("nochg ")):
+        raise RuntimeError(f"3322 动态 DNS 更新失败：{result or '<empty response>'}")
+    LOG.info("3322 动态 DNS 写入成功：%s -> %s（%s）", hostname, ip, result)
+
+
+PROVIDER_OPERATIONS: dict[str, Callable[[str], None]] = {
+    "aliyun": update_aliyun,
+    "cloudflare": update_cloudflare,
+    "3322": update_3322,
+}
+
+
+def enabled_providers(value: str = DDNS_PROVIDERS) -> list[str]:
+    """解析逗号分隔的服务商列表，并拒绝拼写错误和空配置。"""
+    names = list(dict.fromkeys(part.strip().lower() for part in value.split(",") if part.strip()))
+    if not names:
+        raise RuntimeError("DDNS_PROVIDERS 至少需要启用一种更新方式")
+    unknown = [name for name in names if name not in PROVIDER_OPERATIONS]
+    if unknown:
+        supported = ", ".join(PROVIDER_OPERATIONS)
+        raise RuntimeError(f"DDNS_PROVIDERS 包含未知方式：{', '.join(unknown)}；可选：{supported}")
+    return names
+
+
 def load_state() -> dict[str, Any]:
     try:
         with open(DDNS_STATE_FILE, "r", encoding="utf-8") as file:
@@ -252,6 +301,12 @@ def store_ip_history(ip: str, state: dict[str, Any]) -> None:
 def main() -> int:
     configure_logging()
     try:
+        providers = enabled_providers()
+    except RuntimeError:
+        LOG.exception("更新方式配置无效")
+        return 1
+    LOG.info("已启用更新方式：%s", ", ".join(providers))
+    try:
         ip = get_public_ipv4()
     except Exception:
         LOG.exception("获取公网 IPv4 失败")
@@ -265,12 +320,10 @@ def main() -> int:
         LOG.exception("保存公网 IP 历史失败")
         return 1
     results = [
-        sync_provider("aliyun", update_aliyun, ip, state),
-        sync_provider("cloudflare", update_cloudflare, ip, state),
+        sync_provider(name, PROVIDER_OPERATIONS[name], ip, state) for name in providers
     ]
     return 0 if all(results) else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
