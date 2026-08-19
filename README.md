@@ -10,7 +10,7 @@
 - 同步阿里云 DNS A 记录
 - 同步 Cloudflare DNS A 记录（DNS only，不启用代理）
 - 通过 `members.3322.net` 兼容接口同步公云（3322）动态域名
-- 通过 `DDNS_PROVIDERS` 只启用指定的更新方式
+- 在 `config.yml` 中分别启用更新方式并配置任意数量的账号
 - 对临时网络错误和 `429`、`5xx` 响应自动重试
 - 原子写入状态文件，避免中途退出破坏状态
 - 仅在公网 IP 变化时追加一条历史记录
@@ -46,68 +46,67 @@ python -m pip install -r requirements.txt
 
 ## 配置
 
-配置从项目目录下的 `.env` 文件读取。先复制示例文件，再填写真实值：
+配置统一从项目目录下的 `config.yml` 读取。先复制示例文件，再填写真实值：
 
 ```bash
-cp .env.example .env
+cp config.yml.example config.yml
 ```
 
 Windows PowerShell：
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item config.yml.example config.yml
 ```
 
-`.env` 已加入 `.gitignore`，不要强制提交该文件。系统环境变量的优先级高于 `.env` 中的同名配置，便于在容器或 CI 中覆盖配置。
+`config.yml` 已加入 `.gitignore`，不要提交包含真实凭据的文件。完整结构见 `config.yml.example`：
 
-| 环境变量 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `DDNS_PROVIDERS` | 否 | `aliyun,cloudflare` | 启用的更新方式，逗号分隔；可选 `aliyun`、`cloudflare`、`3322` |
-| `ALIYUN_ACCESS_KEY_ID` | 启用 Aliyun 时 | - | 阿里云 AccessKey ID |
-| `ALIYUN_ACCESS_KEY_SECRET` | 启用 Aliyun 时 | - | 阿里云 AccessKey Secret |
-| `ALIYUN_REGION_ID` | 否 | `cn-shenzhen` | 阿里云 API Region ID |
-| `ALIYUN_RECORD_ID` | 启用 Aliyun 时 | - | 要更新的阿里云解析记录 ID，不是域名 |
-| `ALIYUN_RECORD_RR` | 启用 Aliyun 时 | - | 主机记录，例如 `home`；根域名通常为 `@` |
-| `CF_API_TOKEN` | 启用 Cloudflare 时 | - | Cloudflare API Token，需要对应 Zone 的 DNS 编辑权限 |
-| `CF_ZONE_ID` | 启用 Cloudflare 时 | - | Cloudflare Zone ID |
-| `CF_RECORD_ID` | 启用 Cloudflare 时 | - | 要更新的 Cloudflare DNS 记录 ID |
-| `CF_DNS_NAME` | 启用 Cloudflare 时 | - | 完整记录名，例如 `home.example.com` |
-| `DYNDNS_3322_URL` | 否 | `https://members.3322.net/dyndns/update` | 3322 兼容更新接口 |
-| `DYNDNS_3322_USERNAME` | 启用 3322 时 | - | HTTP Basic 用户名 |
-| `DYNDNS_3322_PASSWORD` | 启用 3322 时 | - | HTTP Basic 密码 |
-| `DYNDNS_3322_HOSTNAME` | 启用 3322 时 | - | 要更新的完整动态域名 |
-| `GET_IP_URL` | 否 | `https://ipv4.ddnspod.com` | 返回纯文本 IPv4 地址的查询 URL |
-| `DDNS_HOME` | 否 | 脚本目录 | 运行数据的基础目录；相对路径基于脚本目录，不受启动时工作目录影响 |
-| `DDNS_STATE_FILE` | 否 | `ddns_state.json` | 同步状态文件；相对路径基于 `DDNS_HOME` |
-| `STORE_IP_FILE_PATH` | 否 | `ip_history.txt` | 公网 IP 变更历史；相对路径基于 `DDNS_HOME` |
-| `DDNS_LOG_FILE` | 否 | `update_dns.log` | 运行日志；相对路径基于 `DDNS_HOME`，父目录不存在时自动创建 |
+```yaml
+general:
+  get_ip_url: https://ipv4.ddnspod.com
+  home: /root/update_dns
+  ip_history_file: ip_history.txt
+  state_file: ddns_state.json
+  log_file: update_dns.log
 
-阿里云的记录 ID 可通过云解析 DNS API 的 `DescribeDomainRecords` 查询。Cloudflare 的 Zone ID 可在域名概览页查看，记录 ID 可通过“列出 DNS 记录”API 查询。
+providers:
+  aliyun:
+    enabled: true
+    accounts:
+      - name: home
+        access_key_id: key-1
+        access_key_secret: secret-1
+        region_id: cn-shenzhen
+        record_id: record-1
+        record_rr: home
+      - name: office
+        access_key_id: key-2
+        access_key_secret: secret-2
+        region_id: cn-shanghai
+        record_id: record-2
+        record_rr: office
 
-### `.env` 示例
+  cloudflare:
+    enabled: true
+    accounts:
+      - name: home
+        api_token: token-1
+        zone_id: zone-1
+        record_id: record-1
+        dns_name: home.example.com
+      - name: office
+        api_token: token-2
+        zone_id: zone-2
+        record_id: record-2
+        dns_name: office.example.net
 
-```dotenv
-DDNS_HOME=/root/update_dns
-STORE_IP_FILE_PATH=ip_history.txt
-DDNS_STATE_FILE=ddns_state.json
-DDNS_LOG_FILE=update_dns.log
-DDNS_PROVIDERS=aliyun,cloudflare,3322
-
-ALIYUN_ACCESS_KEY_ID=your-access-key-id
-ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
-ALIYUN_REGION_ID=cn-shenzhen
-ALIYUN_RECORD_ID=1234567890
-ALIYUN_RECORD_RR=home
-
-CF_API_TOKEN=your-cloudflare-api-token
-CF_ZONE_ID=your-zone-id
-CF_RECORD_ID=your-record-id
-CF_DNS_NAME=home.example.com
-
-DYNDNS_3322_USERNAME=your-username
-DYNDNS_3322_PASSWORD=your-password
-DYNDNS_3322_HOSTNAME=your-hostname.x3322.net
+  "3322":
+    enabled: false
+    accounts: []
 ```
+
+每种方式通过 `enabled` 开关控制。每个账号的 `name` 必须唯一，且不能包含空白或冒号；它也用于生成 `aliyun:home`、`cloudflare:office` 等独立状态键。某个账号失败后，下次只重试该账号。
+
+阿里云记录 ID 可通过云解析 DNS API 的 `DescribeDomainRecords` 查询。Cloudflare 的 Zone ID 可在域名概览页查看，记录 ID 可通过“列出 DNS 记录”API 查询。
 
 配置完成后运行：
 
@@ -123,7 +122,7 @@ python .\update_dns.py
 
 ## 运行结果
 
-首次运行会更新两家服务商，并在 `DDNS_HOME` 目录生成（未配置时即脚本目录）：
+首次运行会更新所有已启用实例，并在 `DDNS_HOME` 目录生成（未配置时即脚本目录）：
 
 - `ddns_state.json`：保存每家服务商最后成功写入的 IP 和时间
 - `ip_history.txt`：按 `IP<TAB>时间` 格式记录公网 IP 的变化历史
@@ -133,7 +132,7 @@ python .\update_dns.py
 
 - 当前 IP 与某服务商的成功状态一致：跳过该服务商
 - 当前 IP 已变化：更新所有已启用的服务商
-- 仅一家更新失败：保留另一家的成功状态，下次只重试失败的一家
+- 仅一个实例更新失败：保留其他实例的成功状态，下次只重试失败实例
 - 状态文件不存在或损坏：重新同步全部已启用记录
 
 进程在全部同步成功或无需更新时返回 `0`；公网 IP 获取、状态保存或任一 DNS 更新失败时返回 `1`。
@@ -184,7 +183,7 @@ exit $LASTEXITCODE
 
 ### 提示缺少配置
 
-确认项目目录下存在 `.env`，且错误消息所指的配置项已填写。脚本始终按自身文件位置查找 `.env`，不受当前工作目录影响；系统环境变量如有同名配置则会覆盖文件值。
+确认项目目录下存在 `config.yml`，YAML 缩进正确，且错误消息所指的字段已填写。脚本始终按自身文件位置查找配置文件，不受启动时工作目录影响。
 
 ### 获取公网 IPv4 失败
 
@@ -192,11 +191,11 @@ exit $LASTEXITCODE
 
 ### Cloudflare 更新失败
 
-确认 API Token 至少拥有目标 Zone 的 `DNS:Edit` 权限，并核对 `CF_ZONE_ID` 和 `CF_RECORD_ID`。脚本会把记录设置为 `proxied: false`。
+确认 API Token 至少拥有目标 Zone 的 `DNS:Edit` 权限，并核对 `zone_id` 和 `record_id`。脚本会把记录设置为 `proxied: false`。
 
 ### 阿里云更新失败
 
-确认 AccessKey 对云解析 DNS 具有更新记录的权限，并核对 `ALIYUN_RECORD_ID` 与 `ALIYUN_RECORD_RR` 是否属于同一条记录。
+确认 AccessKey 对云解析 DNS 具有更新记录的权限，并核对 `record_id` 与 `record_rr` 是否属于同一条记录。
 
 ## 安全建议
 

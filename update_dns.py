@@ -10,24 +10,51 @@ import os
 import sys
 import tempfile
 from datetime import datetime
-from typing import Any, Callable
+from functools import partial
+from typing import Any, Callable, Optional
 
 import requests
+import yaml
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from dotenv import load_dotenv
 
 from aliyunsdkcore import client
 from aliyunsdkalidns.request.v20150109 import UpdateDomainRecordRequest
 
 
 # ======================================================
-# 全局配置（从脚本所在目录的 .env 读取，已有系统环境变量优先）
+# 全局配置（从脚本所在目录的 config.yml 读取）
 CUR_DIR = os.path.dirname(os.path.realpath(__file__))
-load_dotenv(os.path.join(CUR_DIR, ".env"), override=False)
+CONFIG_FILE = os.path.join(CUR_DIR, "config.yml")
 
 
-configured_home = os.environ.get("DDNS_HOME", "").strip()
+def load_config() -> dict[str, Any]:
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+            config = yaml.safe_load(file)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"配置文件不存在：{CONFIG_FILE}") from exc
+    except (OSError, yaml.YAMLError) as exc:
+        raise RuntimeError(f"无法读取配置文件 {CONFIG_FILE}：{exc}") from exc
+    if not isinstance(config, dict):
+        raise RuntimeError("config.yml 顶层必须是对象")
+    return config
+
+
+CONFIG_ERROR: Optional[RuntimeError] = None
+try:
+    CONFIG = load_config()
+    GENERAL_CONFIG = CONFIG.get("general", {})
+    PROVIDERS_CONFIG = CONFIG.get("providers", {})
+    if not isinstance(GENERAL_CONFIG, dict) or not isinstance(PROVIDERS_CONFIG, dict):
+        raise RuntimeError("config.yml 的 general 和 providers 必须是对象")
+except RuntimeError as exc:
+    CONFIG_ERROR = exc
+    CONFIG = {}
+    GENERAL_CONFIG = {}
+    PROVIDERS_CONFIG = {}
+
+configured_home = str(GENERAL_CONFIG.get("home", "")).strip()
 configured_home = os.path.expanduser(configured_home or CUR_DIR)
 if not os.path.isabs(configured_home):
     configured_home = os.path.join(CUR_DIR, configured_home)
@@ -36,42 +63,21 @@ DDNS_HOME = os.path.abspath(configured_home)
 
 def resolve_config_path(name: str, default_name: str) -> str:
     """Resolve relative runtime paths against DDNS_HOME."""
-    value = os.environ.get(name, default_name).strip() or default_name
+    value = str(GENERAL_CONFIG.get(name, default_name)).strip() or default_name
     value = os.path.expanduser(value)
     if not os.path.isabs(value):
         value = os.path.join(DDNS_HOME, value)
     return os.path.abspath(value)
 
 
-GET_IP_URL = os.environ.get("GET_IP_URL", "https://ipv4.ddnspod.com").strip()
-DDNS_PROVIDERS = os.environ.get("DDNS_PROVIDERS", "aliyun,cloudflare").strip()
-STORE_IP_FILE_PATH = resolve_config_path("STORE_IP_FILE_PATH", "ip_history.txt")
-DDNS_STATE_FILE = resolve_config_path("DDNS_STATE_FILE", "ddns_state.json")
-DDNS_LOG_FILE = resolve_config_path("DDNS_LOG_FILE", "update_dns.log")
-
-# 阿里云配置
-ALIYUN_ACCESS_KEY_ID = os.environ.get("ALIYUN_ACCESS_KEY_ID", "").strip()
-ALIYUN_ACCESS_KEY_SECRET = os.environ.get("ALIYUN_ACCESS_KEY_SECRET", "").strip()
-ALIYUN_REGION_ID = os.environ.get("ALIYUN_REGION_ID", "cn-shenzhen").strip()
-ALIYUN_RECORD_ID = os.environ.get("ALIYUN_RECORD_ID", "").strip()
-ALIYUN_RECORD_RR = os.environ.get("ALIYUN_RECORD_RR", "").strip()
-
-# Cloudflare 配置
-CF_API_BASE = "https://api.cloudflare.com/client/v4"
-CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
-CF_ZONE_ID = os.environ.get("CF_ZONE_ID", "").strip()
-CF_RECORD_ID = os.environ.get("CF_RECORD_ID", "").strip()
-CF_DNS_NAME = os.environ.get("CF_DNS_NAME", "").strip().rstrip(".").lower()
-
-# 公云（3322）动态域名配置
-DYNDNS_3322_URL = os.environ.get(
-    "DYNDNS_3322_URL", "https://members.3322.net/dyndns/update"
+GET_IP_URL = str(
+    GENERAL_CONFIG.get("get_ip_url", "https://ipv4.ddnspod.com")
 ).strip()
-DYNDNS_3322_USERNAME = os.environ.get("DYNDNS_3322_USERNAME", "").strip()
-DYNDNS_3322_PASSWORD = os.environ.get("DYNDNS_3322_PASSWORD", "").strip()
-DYNDNS_3322_HOSTNAME = (
-    os.environ.get("DYNDNS_3322_HOSTNAME", "").strip().rstrip(".").lower()
-)
+STORE_IP_FILE_PATH = resolve_config_path("ip_history_file", "ip_history.txt")
+DDNS_STATE_FILE = resolve_config_path("state_file", "ddns_state.json")
+DDNS_LOG_FILE = resolve_config_path("log_file", "update_dns.log")
+
+CF_API_BASE = "https://api.cloudflare.com/client/v4"
 # ======================================================
 
 
@@ -129,18 +135,18 @@ def get_public_ipv4() -> str:
     return str(address)
 
 
-def aliyun_client() -> client.AcsClient:
+def aliyun_client(config: dict[str, str]) -> client.AcsClient:
     return client.AcsClient(
-        required_config("ALIYUN_ACCESS_KEY_ID", ALIYUN_ACCESS_KEY_ID),
-        required_config("ALIYUN_ACCESS_KEY_SECRET", ALIYUN_ACCESS_KEY_SECRET),
-        ALIYUN_REGION_ID,
+        required_config("access_key_id", config.get("access_key_id", "")),
+        required_config("access_key_secret", config.get("access_key_secret", "")),
+        config.get("region_id", "cn-shenzhen"),
     )
 
 
-def update_aliyun(ip: str) -> None:
-    record_id = required_config("ALIYUN_RECORD_ID", ALIYUN_RECORD_ID)
-    record_rr = required_config("ALIYUN_RECORD_RR", ALIYUN_RECORD_RR)
-    acs = aliyun_client()
+def update_aliyun(ip: str, config: dict[str, str]) -> None:
+    record_id = required_config("record_id", config.get("record_id", ""))
+    record_rr = required_config("record_rr", config.get("record_rr", ""))
+    acs = aliyun_client(config)
 
     update = UpdateDomainRecordRequest.UpdateDomainRecordRequest()
     update.set_accept_format("json")
@@ -152,8 +158,8 @@ def update_aliyun(ip: str) -> None:
     LOG.info("Aliyun 写入成功：%s -> %s", record_rr, ip)
 
 
-def cf_request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-    token = required_config("CF_API_TOKEN", CF_API_TOKEN)
+def cf_request(method: str, path: str, token: str, **kwargs: Any) -> dict[str, Any]:
+    token = required_config("api_token", token)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     response = HTTP.request(
         method,
@@ -169,24 +175,25 @@ def cf_request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     return payload
 
 
-def update_cloudflare(ip: str) -> None:
-    zone_id = required_config("CF_ZONE_ID", CF_ZONE_ID)
-    record_id = required_config("CF_RECORD_ID", CF_RECORD_ID)
-    dns_name = required_config("CF_DNS_NAME", CF_DNS_NAME)
+def update_cloudflare(ip: str, config: dict[str, str]) -> None:
+    zone_id = required_config("zone_id", config.get("zone_id", ""))
+    record_id = required_config("record_id", config.get("record_id", ""))
+    dns_name = required_config("dns_name", config.get("dns_name", ""))
     cf_request(
         "PATCH",
         f"/zones/{zone_id}/dns_records/{record_id}",
+        token=config.get("api_token", ""),
         json={"content": ip, "proxied": False},
     )
     LOG.info("Cloudflare 写入成功：%s -> %s（DNS only）", dns_name, ip)
 
 
-def update_3322(ip: str) -> None:
+def update_3322(ip: str, config: dict[str, str]) -> None:
     """通过 members.3322.net 兼容接口更新动态域名。"""
-    url = required_config("DYNDNS_3322_URL", DYNDNS_3322_URL)
-    username = required_config("DYNDNS_3322_USERNAME", DYNDNS_3322_USERNAME)
-    password = required_config("DYNDNS_3322_PASSWORD", DYNDNS_3322_PASSWORD)
-    hostname = required_config("DYNDNS_3322_HOSTNAME", DYNDNS_3322_HOSTNAME)
+    url = config.get("url", "https://members.3322.net/dyndns/update")
+    username = required_config("username", config.get("username", ""))
+    password = required_config("password", config.get("password", ""))
+    hostname = required_config("hostname", config.get("hostname", ""))
     response = HTTP.get(
         url,
         params={"hostname": hostname, "myip": ip},
@@ -200,23 +207,85 @@ def update_3322(ip: str) -> None:
     LOG.info("3322 动态 DNS 写入成功：%s -> %s（%s）", hostname, ip, result)
 
 
-PROVIDER_OPERATIONS: dict[str, Callable[[str], None]] = {
+PROVIDER_UPDATERS: dict[str, Callable[..., None]] = {
     "aliyun": update_aliyun,
     "cloudflare": update_cloudflare,
     "3322": update_3322,
 }
 
 
-def enabled_providers(value: str = DDNS_PROVIDERS) -> list[str]:
-    """解析逗号分隔的服务商列表，并拒绝拼写错误和空配置。"""
-    names = list(dict.fromkeys(part.strip().lower() for part in value.split(",") if part.strip()))
-    if not names:
-        raise RuntimeError("DDNS_PROVIDERS 至少需要启用一种更新方式")
-    unknown = [name for name in names if name not in PROVIDER_OPERATIONS]
+def parse_accounts(
+    provider: str,
+    value: Any,
+    required_fields: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """验证账号数组；账号名用于生成独立且稳定的状态键。"""
+    if not isinstance(value, list) or not value:
+        raise RuntimeError(f"providers.{provider}.accounts 必须是非空数组")
+
+    result: list[dict[str, str]] = []
+    seen_names: set[str] = set()
+    for index, raw_account in enumerate(value, start=1):
+        if not isinstance(raw_account, dict):
+            raise RuntimeError(f"providers.{provider}.accounts 第 {index} 项必须是对象")
+        account = {
+            str(key): str(value).strip()
+            for key, value in raw_account.items()
+            if value is not None
+        }
+        name = account.get("name", "")
+        if not name or ":" in name or any(character.isspace() for character in name):
+            raise RuntimeError(
+                f"providers.{provider}.accounts 第 {index} 项的 name 必须非空，"
+                "且不能包含空白或冒号"
+            )
+        if name in seen_names:
+            raise RuntimeError(f"providers.{provider}.accounts 包含重复账号名：{name}")
+        missing = [field for field in required_fields if not account.get(field)]
+        if missing:
+            raise RuntimeError(
+                f"providers.{provider}.accounts 账号 {name} 缺少字段："
+                f"{', '.join(missing)}"
+            )
+        seen_names.add(name)
+        result.append(account)
+    return result
+
+
+def build_provider_operations() -> dict[str, Callable[[str], None]]:
+    """从 YAML 创建已启用的更新实例，使用 provider:name 状态键。"""
+    unknown = [name for name in PROVIDERS_CONFIG if name not in PROVIDER_UPDATERS]
     if unknown:
-        supported = ", ".join(PROVIDER_OPERATIONS)
-        raise RuntimeError(f"DDNS_PROVIDERS 包含未知方式：{', '.join(unknown)}；可选：{supported}")
-    return names
+        raise RuntimeError(f"providers 包含未知方式：{', '.join(unknown)}")
+
+    required_fields = {
+        "aliyun": ("name", "access_key_id", "access_key_secret", "record_id", "record_rr"),
+        "cloudflare": ("name", "api_token", "zone_id", "record_id", "dns_name"),
+        "3322": ("name", "username", "password", "hostname"),
+    }
+    operations: dict[str, Callable[[str], None]] = {}
+    for provider, raw_config in PROVIDERS_CONFIG.items():
+        if not isinstance(raw_config, dict):
+            raise RuntimeError(f"providers.{provider} 必须是对象")
+        enabled = raw_config.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise RuntimeError(f"providers.{provider}.enabled 必须是 true 或 false")
+        if not enabled:
+            continue
+        accounts = parse_accounts(
+            provider, raw_config.get("accounts"), required_fields[provider]
+        )
+        operations.update(
+            {
+                f"{provider}:{account['name']}": partial(
+                    PROVIDER_UPDATERS[provider], config=account
+                )
+                for account in accounts
+            }
+        )
+    if not operations:
+        raise RuntimeError("config.yml 至少需要启用一个账号")
+    return operations
 
 
 def load_state() -> dict[str, Any]:
@@ -229,7 +298,7 @@ def load_state() -> dict[str, Any]:
     except FileNotFoundError:
         return {"providers": {}}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        # 不信任损坏的状态：本次重新写入两家，避免错误跳过 DNS 更新。
+        # 不信任损坏的状态：本次重新写入全部实例，避免错误跳过 DNS 更新。
         LOG.warning("无法读取状态文件 %s，将重新同步全部记录：%s", DDNS_STATE_FILE, exc)
         return {"providers": {}}
 
@@ -300,12 +369,15 @@ def store_ip_history(ip: str, state: dict[str, Any]) -> None:
 
 def main() -> int:
     configure_logging()
+    if CONFIG_ERROR is not None:
+        LOG.error("配置加载失败：%s", CONFIG_ERROR)
+        return 1
     try:
-        providers = enabled_providers()
+        operations = build_provider_operations()
     except RuntimeError:
         LOG.exception("更新方式配置无效")
         return 1
-    LOG.info("已启用更新方式：%s", ", ".join(providers))
+    LOG.info("已启用更新实例：%s", ", ".join(operations))
     try:
         ip = get_public_ipv4()
     except Exception:
@@ -320,7 +392,8 @@ def main() -> int:
         LOG.exception("保存公网 IP 历史失败")
         return 1
     results = [
-        sync_provider(name, PROVIDER_OPERATIONS[name], ip, state) for name in providers
+        sync_provider(name, operation, ip, state)
+        for name, operation in operations.items()
     ]
     return 0 if all(results) else 1
 

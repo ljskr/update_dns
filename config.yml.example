@@ -1,0 +1,49 @@
+general:
+  get_ip_url: https://ipv4.ddnspod.com
+  # 留空时使用脚本目录；相对路径以脚本目录为基准
+  home: ""
+  ip_history_file: ip_history.txt
+  state_file: ddns_state.json
+  log_file: update_dns.log
+
+providers:
+  aliyun:
+    enabled: true
+    accounts:
+      - name: home
+        access_key_id: your-access-key-id
+        access_key_secret: your-access-key-secret
+        region_id: cn-shenzhen
+        record_id: your-record-id
+        record_rr: home
+      # - name: office
+      #   access_key_id: another-access-key-id
+      #   access_key_secret: another-access-key-secret
+      #   region_id: cn-shanghai
+      #   record_id: another-record-id
+      #   record_rr: office
+
+  cloudflare:
+    enabled: false
+    accounts:
+      - name: home
+        api_token: your-cloudflare-api-token
+        zone_id: your-zone-id
+        record_id: your-record-id
+        dns_name: home.example.com
+      # - name: office
+      #   api_token: another-cloudflare-api-token
+      #   zone_id: another-zone-id
+      #   record_id: another-record-id
+      #   dns_name: office.example.net
+
+  "3322":
+    enabled: false
+    accounts:
+      - name: home
+        url: https://members.3322.net/dyndns/update
+        username: your-username
+        password: your-password
+        hostname: your-hostname.x3322.net
+
+
